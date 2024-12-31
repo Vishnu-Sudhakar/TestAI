@@ -7,7 +7,7 @@ load_dotenv()
 
 app = Flask(__name__)
 api_key = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
+client = OpenAI(api_key=api_key, base_url=os.getenv("BASE_URL"))
 
 @app.route("/")
 def home():
