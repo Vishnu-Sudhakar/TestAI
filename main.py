@@ -1,8 +1,13 @@
+import os
 from flask import Flask, render_template, request, jsonify
 from openai import OpenAI
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
-client = OpenAI(api_key="sk-cbe5783f4f90406082384eb9315e12d7", base_url="https://api.deepseek.com")
+api_key = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
 
 @app.route("/")
 def home():

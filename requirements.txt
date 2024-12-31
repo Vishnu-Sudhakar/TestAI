@@ -1,4 +1,4 @@
 flask
 openai
 gunicorn
-Frozen-Flask 
+Frozen-Flask==0.18 
