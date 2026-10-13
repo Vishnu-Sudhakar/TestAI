@@ -1,5 +1,5 @@
 import os
-from flask import Flask, render_template, request, jsonify, send_from_directory
+from flask import Flask, render_template, request, jsonify
 from openai import OpenAI
 from dotenv import load_dotenv
 
@@ -12,10 +12,6 @@ client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
 @app.route("/")
 def home():
     return render_template("index.html")
-
-@app.route("/tunes")
-def tunes():
-    return send_from_directory("math-tunes", "index.html")
 
 @app.route("/chat", methods=["POST"])
 def chat():
