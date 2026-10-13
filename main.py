@@ -7,7 +7,8 @@ load_dotenv()
 
 app = Flask(__name__)
 api_key = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
+# .env is not committed, so the key may be missing; start anyway and report it on /chat.
+client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com") if api_key else None
 
 @app.route("/")
 def home():
@@ -15,6 +16,9 @@ def home():
 
 @app.route("/chat", methods=["POST"])
 def chat():
+    if client is None:
+        return jsonify({"response": "Server has no API key. Add OPENAI_API_KEY=<your key> to a .env file next to main.py and restart."}), 500
+
     user_message = request.json.get("message", "")
     
     response = client.chat.completions.create(
