@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Math Tunes</title>
+<!--
+  Math Tunes: every tune is three math expressions.
+    s(t)    control signal (the black graph): which "note" we are on at time t
+    f(s, t) frequency in Hz, computed from the control signal
+    a(t)    loudness envelope
+  The engine integrates phase += f / sampleRate for every audio sample and
+  feeds that phase into a waveform (sine, square, ...). The same numbers drive
+  the canvas, so the picture and the sound are always in sync.
+-->
+<style>
+  :root {
+    --bg: #fafaf8; --fg: #111; --muted: #777; --card: #fff; --line: #ddd;
+    --red: #ec2d55; --ink: #111; --hl: #ffe066;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #121214; --fg: #eee; --muted: #999; --card: #1c1c20; --line: #333;
+      --red: #ff4d6d; --ink: #eee; --hl: #8a6d00;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 860px; margin: 0 auto; padding: 16px; }
+  h1 {
+    display: inline-block; margin: 8px 0 4px; padding: 4px 14px;
+    background: var(--red); color: #fff; border-radius: 6px; font-size: 26px;
+    letter-spacing: .5px;
+  }
+  .sub { color: var(--muted); margin: 0 0 12px; }
+  canvas {
+    width: 100%; height: 340px; display: block; background: var(--card);
+    border: 1px solid var(--line); border-radius: 10px;
+  }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0; }
+  button, select, input {
+    font: inherit; color: var(--fg); background: var(--card);
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px;
+  }
+  button { cursor: pointer; }
+  button.primary { background: var(--red); color: #fff; border-color: var(--red); font-weight: 600; }
+  label.field { display: grid; grid-template-columns: 90px 1fr; gap: 8px; align-items: center; margin: 6px 0; }
+  label.field span { font-family: Georgia, serif; font-style: italic; text-align: right; }
+  label.field input { font-family: ui-monospace, Menlo, monospace; font-size: 14px; width: 100%; }
+  .small input { width: 90px; }
+  .note {
+    display: inline-block; background: var(--hl); padding: 4px 10px; border-radius: 4px;
+    font-weight: 600; margin-top: 6px;
+  }
+  .err { color: var(--red); font-family: ui-monospace, monospace; min-height: 1.4em; }
+  details { margin-top: 16px; color: var(--muted); }
+  code { font-family: ui-monospace, Menlo, monospace; }
+</style>
+</head>
+<body>
+<main>
+  <h1>MATH TUNES</h1>
+  <p class="sub">Tunes and live graphs generated from math functions.</p>
+
+  <canvas id="graph"></canvas>
+
+  <div class="row">
+    <button id="play" class="primary">▶ Play</button>
+    <select id="preset"></select>
+    <button id="wav">Download WAV</button>
+  </div>
+
+  <label class="field"><span>s(t) =</span><input id="sExpr" spellcheck="false"></label>
+  <label class="field"><span>f(s, t) =</span><input id="fExpr" spellcheck="false"></label>
+  <label class="field"><span>a(t) =</span><input id="aExpr" spellcheck="false"></label>
+
+  <div class="row small">
+    <label>slide τ <input id="tau" type="number" step="0.01" min="0"></label>
+    <label>length (s) <input id="dur" type="number" step="1" min="1" max="30"></label>
+    <label>wave
+      <select id="wave">
+        <option>sine</option><option>triangle</option><option>square</option>
+        <option>saw</option><option>808</option>
+      </select>
+    </label>
+  </div>
+
+  <div id="note" class="note"></div>
+  <div id="err" class="err"></div>
+
+  <details>
+    <summary>Helpers you can use in expressions</summary>
+    <p>All of <code>Math</code> (<code>sin, cos, sqrt, floor, log2, PI</code>, …) plus:</p>
+    <ul>
+      <li><code>seq(t, rate, list)</code> – the list item playing at time t, stepping <code>rate</code> times per minute (loops)</li>
+      <li><code>env(t, rate, decay)</code> – a pluck that restarts <code>rate</code> times per minute and fades with time constant <code>decay</code></li>
+      <li><code>scale(degree, root, MAJOR | MINOR | PENTA)</code> – frequency of a scale degree</li>
+      <li><code>range(a, b)</code>, <code>FIB</code>, <code>PI_DIGITS</code>, <code>PHI</code>, <code>collatz(n)</code>, <code>logistic(r, x0, count)</code></li>
+    </ul>
+    <p>Pitch math: one octave = ×2, one semitone = ×2<sup>1/12</sup>, the tritone = ×√2.</p>
+  </details>
+</main>
+
+<script>
+// ---------- math helpers exposed to expressions ----------
+const range = (a, b) => Array.from({ length: b - a }, (_, i) => a + i);
+const MAJOR = [0, 2, 4, 5, 7, 9, 11], MINOR = [0, 2, 3, 5, 7, 8, 10], PENTA = [0, 2, 4, 7, 9];
+const PHI = (1 + Math.sqrt(5)) / 2;
+const FIB = (() => { const f = [1, 1]; while (f.length < 40) f.push(f.at(-1) + f.at(-2)); return f; })();
+const PI_DIGITS = "31415926535897932384626433832795028841971693993751".split("").map(Number);
+const collatz = n => { const out = [n]; while (n !== 1) { n = n % 2 ? 3 * n + 1 : n / 2; out.push(n); } return out; };
+const logistic = (r, x, count) => range(0, count).map(() => (x = r * x * (1 - x)));
+const seq = (t, rate, list) => list[Math.floor(t * rate / 60) % list.length];
+const env = (t, rate, decay) => {
+  const tb = t % (60 / rate);
+  return (1 - Math.exp(-tb / 0.004)) * Math.exp(-tb / decay); // 4 ms attack avoids clicks
+};
+const scale = (deg, root, steps) => {
+  deg = Math.round(deg);
+  const oct = Math.floor(deg / steps.length), i = ((deg % steps.length) + steps.length) % steps.length;
+  return root * 2 ** (oct + steps[i] / 12);
+};
+const HELPERS = { range, MAJOR, MINOR, PENTA, PHI, FIB, PI_DIGITS, collatz, logistic, seq, env, scale };
+
+// ---------- presets: each tune is just a few expressions ----------
+const PRESETS = [
+  { name: "The Devil's Interval (808 tritone slide)",
+    s: "seq(t, 280, [0,0,1,0, 0,1,1,0, 0,0,1,0, 1,1,0,1])",
+    f: "65.4 * sqrt(2) ** s", a: "env(t, 70, 0.9)", tau: 0.03, wave: "808", dur: 8,
+    note: "√2 × the frequency = the tritone (half an octave)" },
+  { name: "Exponential chirp",
+    s: "t / 8", f: "110 * 2 ** (3 * s)", a: "1", tau: 0, wave: "sine", dur: 8,
+    note: "f = f₀·2^(3t/T): equal time per octave" },
+  { name: "Harmonic series",
+    s: "seq(t, 240, range(1, 17))", f: "110 * s", a: "env(t, 240, 0.25)", tau: 0, wave: "triangle", dur: 8,
+    note: "fₙ = n·f₀: the notes hiding inside every sound" },
+  { name: "Just-intonation arpeggio",
+    s: "seq(t, 300, [1, 5/4, 3/2, 2, 5/2, 2, 3/2, 5/4])", f: "220 * s", a: "env(t, 300, 0.3)", tau: 0, wave: "triangle", dur: 8,
+    note: "1 : 5/4 : 3/2 = a major chord as pure ratios" },
+  { name: "Fibonacci melody",
+    s: "seq(t, 300, FIB.map(n => n % 8))", f: "scale(s, 220, MAJOR)", a: "env(t, 300, 0.25)", tau: 0, wave: "sine", dur: 8,
+    note: "Fibonacci numbers mod 8 → major scale degrees" },
+  { name: "Digits of π",
+    s: "seq(t, 320, PI_DIGITS)", f: "scale(s, 220, PENTA)", a: "env(t, 320, 0.25)", tau: 0, wave: "triangle", dur: 9,
+    note: "3.14159… mapped onto a pentatonic scale" },
+  { name: "Chaos: the logistic map",
+    s: "seq(t, 360, logistic(3.9, 0.5, 64))", f: "scale(floor(s * 10), 196, PENTA)", a: "env(t, 360, 0.2)", tau: 0, wave: "square", dur: 10,
+    note: "xₙ₊₁ = 3.9·xₙ(1 − xₙ): never repeats" },
+  { name: "Collatz hailstone (n = 27)",
+    s: "seq(t, 420, collatz(27).map(log2))", f: "110 * 2 ** (s / 4)", a: "env(t, 420, 0.15)", tau: 0.01, wave: "saw", dur: 16,
+    note: "n → n/2 or 3n+1, pitch = log₂(n)" },
+  { name: "Vibrato: sine of a sine",
+    s: "sin(2 * PI * 5 * t) * min(1, t / 2)", f: "330 * 2 ** (s / 12)", a: "1", tau: 0, wave: "sine", dur: 6,
+    note: "f = f₀·2^(sin(2π·5t)/12): ±1 semitone wobble" },
+  { name: "Golden-ratio melody",
+    s: "seq(t, 300, range(0, 32).map(k => (k * PHI) % 1))", f: "220 * 2 ** s", a: "env(t, 300, 0.3)", tau: 0.02, wave: "sine", dur: 8,
+    note: "kφ mod 1: the most evenly spread notes possible" },
+];
+
+// ---------- compile user expressions ----------
+const MATH_NAMES = Object.getOwnPropertyNames(Math);
+function compile(expr, args) {
+  const names = [...MATH_NAMES, ...Object.keys(HELPERS)];
+  const values = [...MATH_NAMES.map(k => Math[k]), ...Object.values(HELPERS)];
+  const fn = new Function(...names, `return (${args.join(",")}) => (${expr});`)(...values);
+  return fn;
+}
+
+// ---------- synthesis ----------
+const SR = 44100;
+const WAVES = {
+  sine: p => Math.sin(2 * Math.PI * p),
+  triangle: p => 1 - 4 * Math.abs(p - 0.5),
+  square: p => Math.tanh(4 * Math.sin(2 * Math.PI * p)),   // softened to reduce aliasing
+  saw: p => 2 * p - 1,
+  "808": p => Math.tanh(2.5 * Math.sin(2 * Math.PI * p)), // saturated sine bass
+};
+
+function render(cfg) {
+  const sFn = compile(cfg.s, ["t"]), fFn = compile(cfg.f, ["s", "t"]), aFn = compile(cfg.a, ["t"]);
+  const n = Math.floor(cfg.dur * SR);
+  const audio = new Float32Array(n);
+  const wave = WAVES[cfg.wave];
+  // Exponential slide toward the target: y → y1 + (y0 − y1)·e^(−t/τ), done one sample at a time.
+  const k = cfg.tau > 0 ? 1 - Math.exp(-1 / (cfg.tau * SR)) : 1;
+
+  const VIS = 1200; // points kept for drawing
+  const vis = { s: new Float32Array(VIS), f: new Float32Array(VIS), a: new Float32Array(VIS) };
+
+  let s = Number(sFn(0)) || 0, phase = 0, peak = 1e-9;
+  for (let i = 0; i < n; i++) {
+    const t = i / SR;
+    const target = Number(sFn(t));
+    if (!Number.isFinite(target)) throw new Error(`s(t) is not a number at t = ${t.toFixed(3)}`);
+    s += (target - s) * k;
+    const f = Math.min(Math.max(Number(fFn(s, t)) || 0, 0), SR / 2);
+    const a = Number(aFn(t)) || 0;
+    phase = (phase + f / SR) % 1;
+    const y = a * wave(phase);
+    audio[i] = y;
+    peak = Math.max(peak, Math.abs(y));
+    const j = Math.floor(i * VIS / n);
+    vis.s[j] = s; vis.f[j] = f; vis.a[j] = a;
+  }
+  const gain = 0.8 / peak;
+  for (let i = 0; i < n; i++) audio[i] *= gain;
+  return { audio, vis, dur: cfg.dur };
+}
+
+// ---------- UI ----------
+const $ = id => document.getElementById(id);
+const fields = ["sExpr", "fExpr", "aExpr", "tau", "dur", "wave"].map($);
+PRESETS.forEach((p, i) => $("preset").add(new Option(`#${i + 1}/10  ${p.name}`, i)));
+
+let actx = null, source = null, startedAt = 0, current = null;
+
+function readCfg() {
+  return {
+    s: $("sExpr").value, f: $("fExpr").value, a: $("aExpr").value,
+    tau: Math.max(0, +$("tau").value || 0),
+    dur: Math.min(30, Math.max(1, +$("dur").value || 8)),
+    wave: $("wave").value,
+  };
+}
+
+function loadPreset(i) {
+  const p = PRESETS[i];
+  $("sExpr").value = p.s; $("fExpr").value = p.f; $("aExpr").value = p.a;
+  $("tau").value = p.tau; $("dur").value = p.dur; $("wave").value = p.wave;
+  $("note").textContent = p.note;
+  rebuild();
+}
+
+function rebuild() {
+  try {
+    current = render(readCfg());
+    $("err").textContent = "";
+  } catch (e) {
+    $("err").textContent = e.message;
+    return;
+  }
+  if (source) start(); // restart playback with the new sound
+}
+
+function start() {
+  actx ??= new AudioContext({ sampleRate: SR });
+  stop();
+  const buf = actx.createBuffer(1, current.audio.length, SR);
+  buf.copyToChannel(current.audio, 0);
+  source = actx.createBufferSource();
+  source.buffer = buf; source.loop = true;
+  source.connect(actx.destination);
+  source.start();
+  startedAt = actx.currentTime;
+  $("play").textContent = "■ Stop";
+}
+
+function stop() {
+  if (source) { source.stop(); source.disconnect(); source = null; }
+  $("play").textContent = "▶ Play";
+}
+
+$("play").onclick = () => (source ? stop() : current && start());
+$("preset").onchange = e => loadPreset(+e.target.value);
+let debounce;
+fields.forEach(el => el.addEventListener("input", () => {
+  $("note").textContent = "custom";
+  clearTimeout(debounce); debounce = setTimeout(rebuild, 400);
+}));
+
+$("wav").onclick = () => {
+  if (!current) return;
+  const pcm = current.audio, dv = new DataView(new ArrayBuffer(44 + pcm.length * 2));
+  const str = (o, s) => [...s].forEach((c, i) => dv.setUint8(o + i, c.charCodeAt(0)));
+  str(0, "RIFF"); dv.setUint32(4, 36 + pcm.length * 2, true); str(8, "WAVEfmt ");
+  dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+  dv.setUint32(24, SR, true); dv.setUint32(28, SR * 2, true); dv.setUint16(32, 2, true);
+  dv.setUint16(34, 16, true); str(36, "data"); dv.setUint32(40, pcm.length * 2, true);
+  pcm.forEach((v, i) => dv.setInt16(44 + i * 2, Math.max(-1, Math.min(1, v)) * 32767, true));
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([dv], { type: "audio/wav" }));
+  a.download = "math-tune.wav"; a.click();
+};
+
+// ---------- drawing ----------
+const canvas = $("graph"), g = canvas.getContext("2d");
+
+function draw() {
+  requestAnimationFrame(draw);
+  const dpr = devicePixelRatio || 1, W = canvas.clientWidth, H = canvas.clientHeight;
+  if (canvas.width !== W * dpr || canvas.height !== H * dpr) { canvas.width = W * dpr; canvas.height = H * dpr; }
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, W, H);
+  if (!current) return;
+
+  const css = getComputedStyle(document.documentElement);
+  const red = css.getPropertyValue("--red"), ink = css.getPropertyValue("--ink"), line = css.getPropertyValue("--line");
+  const { vis, dur } = current, N = vis.s.length;
+  const progress = source ? ((actx.currentTime - startedAt) % dur) / dur : 1;
+  const pad = 20, x = i => pad + (W - 2 * pad) * i / (N - 1);
+
+  // axes and time ticks (one per half second)
+  g.strokeStyle = line; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(pad, H * 0.62); g.lineTo(W - pad, H * 0.62); g.stroke();
+  for (let s = 0; s <= dur; s += 0.5) {
+    const tx = pad + (W - 2 * pad) * s / dur, h = s % 1 === 0 ? 12 : 6;
+    g.beginPath(); g.moveTo(tx, H - 8 - h); g.lineTo(tx, H - 8); g.stroke();
+  }
+
+  // Red: the sound wave, slowed down ~250× so you can see it. Its wiggle rate follows f(t).
+  let fmean = 0; for (const f of vis.f) fmean += f; fmean = fmean / N || 1;
+  const cycles = 3 * dur;  // wiggles drawn across the screen at the average pitch
+  const redPath = [];
+  let ph = 0;
+  for (let i = 0; i < N; i++) {
+    ph += (vis.f[i] / fmean) * cycles / N;
+    redPath.push(H * 0.25 - Math.min(1, Math.abs(vis.a[i])) * H * 0.17 * Math.sin(2 * Math.PI * ph));
+  }
+
+  // Black: the control signal s(t), normalised to its own min/max.
+  let lo = Infinity, hi = -Infinity;
+  for (const v of vis.s) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+  const span = hi - lo || 1;
+  const blackPath = Array.from(vis.s, v => H * 0.88 - (v - lo) / span * H * 0.4);
+
+  const upto = Math.max(1, Math.floor(progress * (N - 1)));
+  const stroke = (path, color, alpha, from, to) => {
+    g.globalAlpha = alpha; g.strokeStyle = color; g.lineWidth = 2.5; g.lineJoin = "round";
+    g.beginPath();
+    for (let i = from; i <= to; i++) i === from ? g.moveTo(x(i), path[i]) : g.lineTo(x(i), path[i]);
+    g.stroke(); g.globalAlpha = 1;
+  };
+  stroke(redPath, red, 0.15, 0, N - 1);
+  stroke(blackPath, ink, 0.15, 0, N - 1);
+  stroke(redPath, red, 1, 0, upto);
+  stroke(blackPath, ink, 1, 0, upto);
+
+  // playhead dots
+  for (const [path, color] of [[redPath, red], [blackPath, ink]]) {
+    g.fillStyle = color; g.beginPath(); g.arc(x(upto), path[upto], 6, 0, 2 * Math.PI); g.fill();
+  }
+  g.fillStyle = css.getPropertyValue("--muted"); g.font = "12px system-ui";
+  g.fillText(`f = ${vis.f[upto].toFixed(1)} Hz`, pad, 16);
+  g.fillText("s(t)", pad, H * 0.62 - 6);
+}
+
+loadPreset(0);
+draw();
+</script>
+</body>
+</html>
